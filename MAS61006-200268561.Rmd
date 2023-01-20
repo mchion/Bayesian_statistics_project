@@ -1,0 +1,526 @@
+---
+title: \vspace{-1.1cm} Quantifying the Demographics of Birth Control Users
+author: "Registration Number: 200268561"
+date: "27th April 2021"
+output: 
+  pdf_document:
+    includes:
+      keep_tex: yes
+    number_sections: true
+    extra_dependencies:
+    - float
+    - subfig
+fontsize: 11pt
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos="H",out.extra="")
+
+```
+
+\vspace{-1cm}
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rstan)
+library(mice)       #check for missing values
+library(bayesplot)  #mcmc_trace
+library(lme4)       #glmer
+
+library(knitr)      #tables in rmarkdown
+library(ggridges)   #geom_density_ridges
+library(cowplot)    #grid_plot
+library(pander)     #pander tables
+library(janitor)    #adorn
+library(viridis)    #color scheme
+library(latex2exp)  #latex in ggplot captions
+library(grid)       #tableGrob
+library(gridExtra)  #tableGrob
+
+rstan_options(auto_write=TRUE)
+
+set.seed(1254)
+```
+
+# Introduction
+
+We have been asked by the client to analyze a range of demographic variables that may be linked to the uptake of birth control by a woman. In particular, the client's primary interest is identifying key demographic variables that have an effect on birth control use, quantifying such demographic effect, and predicting the chance of certain demographic groups purchasing birth control in the future. 
+
+After some exploratory data analysis, we will fit a statistical model to the data and see how the predictions and fitted parameters it provides can further our understanding of the key demographic variables for birth control users. In particular, we will focus on certain demographic groups and what the model tells us about these groups in the two largest regions -- regions 1 and 14. 
+
+
+
+```{r, include=FALSE}
+
+# Import data
+df <- read_csv("birth-control-data.csv")
+
+# remove first column
+df <- df %>% subset(select= -c(X1))
+
+# convert specified columns to factor 
+df <- df %>% mutate_at(ggplot2::vars("region","homeStyle"), factor)
+
+
+```
+
+
+# Methods
+
+## The Data
+The data set contains 1,934 different subjects with 6 variables attached to each subject. The variables are summarized in **Table 1**. All subjects are women. The number of children range 1 to 4. Age and wealth have been standardized so that the mean age is 0 and mean wealth is 0. 
+
+We note that there are 60 different regions in this data set, but region 54 is omitted, which causes the numbering of these regions to be 1, 2, 3...61. We do not know whether this was an omission or a misclassification, but we have been told that the regions in this data set do not the full range of the client's target market, and so for the purposes of this analysis, we will ignore this detail. There is no other missing data as far as we know in this data set. 
+
+```{r, echo=FALSE, include=FALSE,eval=FALSE}
+# Check for missing values
+md.pattern(df)
+```
+
+&nbsp;
+
+`Variable` | Description
+--- | --- 
+`birthControl` | whether the subject uses birth control (1) or not (0)
+`region`| primary region subject belongs to
+`homeStyle`| whether the subject lives in an urban (1) or rural area (0)
+`children`| number of children subject has
+`age`| age of subject
+`wealth`| financial wealth of subject
+
+Table: Description of Variables in Birth Control Data Set
+
+\clearpage
+
+
+## Exploratory Data Analysis
+
+Of the 1,934 different subjects, 1,175 (61%) do not use birth control and 759 (39%) do. The breakdown by `region`, `homeStyle`, `children`, and `wealth` are shown in **Figure 1** and **Figure 2**. For the purpose of clarity, `0` and `1` for `birthControl` have been replaced with `Non-User` and `User`, respectively. 
+
+
+```{r, echo=FALSE, include=FALSE}
+
+# overall birth control use percentage
+df %>% group_by(birthControl) %>%
+  summarize(n=n(),.groups='drop') %>%
+  mutate(per=prop.table(n))
+
+
+```
+
+
+```{r, echo=FALSE,include=FALSE}
+
+# check to see if any regions have 0% or 100% birth control use. If yes, then cannot do design variable.
+# region 11 and 49 are 0%
+# region 3 is 100%
+df %>% group_by(region) %>%
+  summarize(mean=mean(birthControl),.groups='drop') %>%
+  arrange(mean)
+
+```
+
+
+```{r, echo=FALSE}
+
+# create table for homeStyle plot
+df_homeStyle <- df %>%
+  group_by(homeStyle,birthControl) %>%
+  summarize(n= n(),.groups='drop') %>%
+  group_by(homeStyle) %>%
+  mutate(per=prop.table(n))
+
+# create table for children plot
+df_children <- df %>%
+  group_by(children,birthControl) %>%
+  summarize(n= n(),.groups='drop') %>%
+  group_by(children) %>%
+  mutate(per=prop.table(n))
+```
+
+
+```{r, echo=FALSE,fig.height=3, fig.width=6, fig.align="center", fig.cap="Subjects who are urban or have more children are more likely to be birth control users than subjects who are rural or have less children."}
+
+g_1 <- df_homeStyle %>% ggplot(aes(x=homeStyle,y=per,group=birthControl,fill=as.factor(birthControl))) + 
+  geom_bar(stat='identity',show.legend = TRUE,alpha=.6) +
+  theme_light() + 
+  ylab("Percent of Demographic") + 
+  scale_fill_viridis_d(name = "birthControl", labels = c("Non-User", "User")) + 
+  theme(legend.position="none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+g_2 <- df_children %>% ggplot(aes(x=children,y=per,group=birthControl,fill=as.factor(birthControl))) + 
+  geom_bar(stat='identity',show.legend = FALSE,alpha=.6) +
+  theme_light() + 
+  ylab('') +
+  scale_fill_viridis_d() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+legend_b <- get_legend(
+  g_1 + 
+    guides(color = guide_legend(nrow = 1)) +
+    theme(legend.position = 'bottom' ,legend.justification='left', legend.key = element_rect(color='black'))
+)
+
+plot_row1 <- plot_grid(g_1,g_2) 
+plot_grid(legend_b, plot_row1, ncol=1, rel_heights = c(0.1, 1))
+
+
+```
+
+
+```{r,echo=FALSE,message=FALSE,cache=TRUE,fig.height=3.2, fig.width=6, fig.align="center", fig.cap="Overlaid density distributions of birth control users vs. non-users suggest that non-users tend to be younger than users. However, there doesn't seem to be a difference between the wealth of users vs. non-users."}
+g1<-df %>% ggplot() + geom_density_ridges(data = df, 
+                                          aes(x = age, 
+                                              y=as.factor(birthControl),
+                                              fill=as.factor(birthControl), 
+                                              height =..density..),
+                                          alpha=.6,
+                                          scale=1.2,
+                                          show.legend=TRUE) + 
+    ylab("Density") + 
+    theme_light() + 
+    scale_fill_viridis_d(name = "birthControl", labels = c("Non-User", "User")) + 
+    theme(legend.position="none", axis.text.y = element_blank())
+
+g2<-df %>% ggplot() + geom_density_ridges(data = df, 
+                                          aes(x = wealth, 
+                                              y=as.factor(birthControl),
+                                              fill=as.factor(birthControl), 
+                                              height = ..density..),
+                                          alpha=.6,
+                                          scale=1.2,
+                                          show.legend=FALSE) + 
+    ylab('') + 
+    theme_light() + 
+    scale_fill_viridis_d() + 
+    theme(axis.text.y = element_blank())
+
+legend_c <- get_legend(
+  g1 + 
+    guides(color = guide_legend(nrow = 1)) +
+    theme(legend.position = 'bottom' ,legend.justification='left')
+)
+
+
+plot_row2 <- plot_grid(g1,g2) 
+plot_grid(legend_c,plot_row2, ncol=1, rel_heights = c(0.1,1))
+
+
+```
+
+In general, it seems that subjects who are urban, have more children, and/or older are more likely to be birth control users. However, we cannot quantify a combination of these variables without a statistical model, which we will fit in the next section. 
+
+## Fitting a Model
+
+A logistic regression model is appropriate for our data set because we want to calculate the probability that a subject with certain demographics (`homeStyle`, `children`, `age`, `weight`, and `region`) belongs to a certain binary category (`birth control`). In particular, a mixed effect linear regression model is appropriate here with `homeStyle` being treated as a factor variable, and `children`, `age`, and `wealth` as continuous variables (although one can treat `children` as a factor variable, we are not so concerned about separating subjects with different number of children into distinct groups). Because it doesn't seem as if the data was gathered as part of a specific design experiment, we will not worry about designating any variables as design variables. 
+
+We cannot include `region` as a fixed effect because regions 11 and 49 contains only non-users of birth control (thus their predicted probability would be 0), and region 3 has only users of birth control (thus its predicted probability would be 1). In addition, we do not believe each region has a separate effect on birth control use but rather a random effect that comes from a global distribution. Thus, a random effects treatment for region is more appropriate, with region treated as a grouping variable. 
+
+We will fit this Bayesian logistic regression model using Stan. The model can be described as: 
+$$Y_{i} \sim Bernoulli(\mu_{i}),$$
+with the logit link being defined as: 
+$$\text{logit}(\mu_{i}) = \beta_0 + \beta_1 x_{1,i} + \beta_2 x_{2,i} + \beta_3 x_{3,i} + \beta_4 x_{4,i} + b_i,$$ 
+where
+
+* $\beta_0$ is the intercept -- the baseline model of a rural subject with 1 child, age 0, and wealth 0, 
+* $\beta_1$ is the additive contribution of the `homeStyle` factor where $x_{1, i} = 0$ indicates rural and $x_{1, i}=1$ indicates urban,
+* $x_{2,i}, x_{3,i}, x_{4,i}$ are the corresponding `children`, `age`, and `wealth` covariates of region $i$, and
+* $b_i \sim N(0,\sigma^2_b)$ is the random effects term due to the region grouping variable. 
+
+Note that this is not a formal mathematical definition. These equations are written out here to clarify the linear predictor and the beta parameters. 
+
+We will also assume a half-Cauchy distribution as our prior, truncated at 0, as a sensible choice for a proper prior for our random effects parameter $\sigma_b$. Half of the distribution is under 1, but it is heavy tailed enough for proper "exploration" when sampling because of the extreme values it can select during simulation. (McElreath, Statistical Rethinking, 1st ed. 2015, pg. 260). The purpose of a noninformative prior is not about incorporating actual prior knowledge but more about not constraining the posterior distribution. Our posterior vs. prior check in Section 3.2 will confirm that indeed this is the case.  
+
+```{r, echo=FALSE,include=FALSE}
+
+# summary table grouped by homeStyle, then children
+df %>% group_by(homeStyle,children) %>% summarize(n=n(),.groups='drop')
+```
+
+
+
+\newpage 
+
+# Results
+
+## Model parameters
+```{stan, output.var="stan_model", cache=TRUE, echo=FALSE}
+data {
+  int<lower = 0> Nobs ;                         // number of observations
+  int<lower = 0> Nregions ;                     // number of random effects groups (60 regions)
+  int<lower = 0> Npreds ;                       // number of independent variables 
+  int<lower = 0, upper = 1> y[Nobs] ;           // the observations, a vector of binary outcomes
+  int<lower = 1, upper = Nregions> region[Nobs] ; // vector associating each obs with region
+  matrix[Nobs, Npreds] X ;                      // the independent variables
+}
+parameters {                                     
+  vector[Nregions] b ;                             
+  real<lower = 0> sigmab ;
+  vector[Npreds] beta ;
+}
+model {
+  b ~ normal(0, sigmab) ;           //region random effect
+  sigmab ~ cauchy(0, 1) ;           //overall standard error - half-Cauchy
+  for(n in 1:Nobs) {
+    y[n] ~ bernoulli_logit(X[n] * beta + b[region[n]]) ;
+  }
+}
+
+generated quantities {
+  vector[Nregions] y_pred ;                            
+  real bTilde = normal_rng(0, sigmab) ;
+  int<lower = 0> yTilde = bernoulli_logit_rng(beta[1] + 1*beta[2] + 2.65*beta[3] +  bTilde) ;
+  for (n in 1:Nregions)
+    y_pred[n] = bernoulli_logit_rng(beta[1] + 1*beta[2] + 2.65*beta[3] +  b[n]) ;
+}
+
+
+```
+
+
+
+```{r, cache=TRUE, echo=FALSE}
+
+# get design matrix from glmer function
+designMatrix <- model.matrix(~ homeStyle + children + age + wealth,
+                             data = df)
+
+# Define data
+data <- list(Nobs = nrow(df),
+                Nregions = length(unique(df$region)),
+                Npreds = ncol(designMatrix),
+                y = df$birthControl,
+                region = as.numeric(df$region),
+                X = designMatrix)
+
+#fit model
+myfit <- sampling(stan_model,
+              data = data,
+              cores = 2,
+              refresh = 0)
+
+```
+
+Because the logit link is defined in terms of log-odds, we need to raise $e$ to the power of the results (fitted parameter values) of our model ($e^{result}$) so that we can more easily interpret our results as odds. **Figure 3** shows these results, as well as their 95\% posterior interval quantiles. 
+
+
+```{r,echo=FALSE,warning=FALSE}
+# Exponentiate the log_odds to get odds
+odds = exp(summary(myfit)$summary[,c(1,4,8)]) %>% 
+  data.frame() %>% 
+  slice(61:66) %>%
+  rename('Odds'=mean,'2.5%'=X2.5.,'97.5%'=X97.5.) %>%
+  adorn_rounding(2)
+
+odds$Odds <- round(odds$Odds,2)
+
+dimnames(odds)[[1]] <- c('random_effect','intercept','urban','children','age','wealth')
+
+
+# fitArray
+fitArray <- as.array(myfit)[,,c(61:66)]
+dimnames(fitArray)[[3]] <- c("random_effect", 'intercept','HomeStyle_urban','children','age','wealth')
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Posterior credible interval means and quantiles at 0.025 and 0.975 for the beta parameters and random effects variance parameter, both as a table and as plots. We see significant evidence of higher odds of birth control use for women who live in in urban areas and have more children.",fig.height=3}
+
+# plot odds table and credible intervals
+
+add_title <- function(g, title, padding = unit(2,"mm"), lpos=1, ...){
+  tg <- textGrob(title, ...)
+  g %>%
+    gtable::gtable_add_rows(heights = grobHeight(tg) + padding, pos = 0L) %>% 
+    gtable::gtable_add_grob(tg, t=1,b=1,l=lpos,r=ncol(g))
+}
+
+d1 <- ggplotGrob(
+  mcmc_intervals(fitArray, prob_outer = 0.95, prob=0.95, transformations=exp) + 
+  labs(title="",x="Odds") + 
+  theme(axis.text.y = element_text(size=8), axis.title=element_text(size=10)) + 
+  scale_y_discrete(labels=c("t(wealth)" =  "wealth", 
+                           "t(age)" = "age",
+                           "t(children)" = "children",
+                           "t(HomeStyle_urban)" = "urban",
+                           "t(intercept)" = "intercept", 
+                           "t(random_effect)" = "random effect"),
+                   limits=rev)
+)
+
+
+d2 <- tableGrob(odds, theme = ttheme_default(base_size = 9, 
+                                             colhead = list(padding=unit.c(unit(4, "mm"), unit(6, "mm"))),
+                                             core = list(padding=unit.c(unit(4, "mm"), unit(6, "mm")))
+                                             )
+                )
+
+
+title1 <- ggdraw() + 
+  draw_label(
+    "",
+    fontface = 'plain',
+    x = 0,
+    hjust = 0
+  ) + theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7)
+  )
+
+plot_row3 <- plot_grid(d2, d1,nrow=1,rel_widths=c(1,1.5),align='b')
+plot_grid(plot_row3, ncol=1, rel_heights = c(0.1,1))
+```
+
+
+We interpret the odds of an event occurring in the following manner: If the odds of being a birth control user is 2 to 1, that means for every 2 subjects that use birth control, there is 1 that does not use birth control. 
+
+Using this interpretation of odds, we can interpret the intercept parameter value ($\beta_0$) from our model as follows: Our baseline model is a subject who is rural, has one child, and has age and wealth of 0. The odds of this subject using birth control is 0.15, or 15 to 100. In other words, for every 15 subjects fit this demographic and use birth control, there will also be 100 who also fit this demographic but do not use birth control. 
+
+The urban parameter ($\beta_1$) can be interpreted in a similar manner: a subject who has the demographics of our baseline model, but has a `homeStyle` of urban (1) instead of rural (0) has 2.07 times the odds of using birth control than the baseline model (so 0.15 x 2.07 = 0.31). Now for every 31 subjects who use birth control, there will also be 100 who don't. 
+
+Overall, we see that being urban and having more children increases the odds of being a birth control user, but age and wealth do not seem to have much effect due to the fact that they are pretty close to 1 (the odds don't change when you multiply by 1). Thus, we have strong evidence of a positive association between `birthControl` and `homeStyle` and `children`, borderline evidence of a slightly negative association between `birthControl` and `age`, and no evidence of an association between `birthControl` and `wealth`. 
+
+\newpage
+
+## Model checks
+
+We need to first check that our Markov chains converge. We see in **Figure 4** that they do converge -- all of our parameters seem to be varying randomly around some steady level. Convergence is important because we want a Markov chain that is stationary (independent).
+
+We also need to check that our posterior distribution doesn't match our prior distribution. If it does, then our data was too constrained by our choice of prior. We see in **Figure 5** that the posterior does not match our prior and has created a sensible looking distribution around the median. 
+
+
+```{r,echo=FALSE,fig.cap="Trace plots of sampled parameters indicate convergence after the warm-up period of 1000 iterations.",fig.height=3,fig.width=7}
+
+# convergence check
+mcmc_trace(fitArray)
+
+```
+
+
+```{r,eval=TRUE,message=FALSE, echo=FALSE,fig.height=3,fig.cap="Prior density (black), posterior histogram (blue), and likelihood-based estimate (red) of the random effects parameter. Posterior shows a distinctly different distribution than prior, suggesting that our proper prior was a good choice."}
+
+# prior distribution check
+
+glm_model <-lme4::glmer(birthControl ~ homeStyle + children + age + wealth + (1 | region), family = binomial, data = df, nAGQ = 25)
+
+
+mydf <- data.frame(rstan::extract(myfit))
+prior <- function(x){2*dt(x, 1)}
+dummydf <- data.frame(x = c(0, 3))
+ggplot(mydf) +
+  geom_histogram(aes(x = sigmab, y =..ndensity..),
+                 col = "dodgerblue3", fill = "white",
+                 alpha = 0.5, binwidth = 0.02) +
+  stat_function(data = dummydf,
+                aes(x = x),
+                fun = prior) + 
+  geom_vline(xintercept = glm_model@theta, col = "red") + 
+  theme_light() + 
+  labs(title=TeX(r'(Posterior vs. Prior Distributions of $\sigma_b$)'),x=TeX(r'(Region random effects parameter $\sigma_b$)'),y="Density")
+
+```
+
+\newpage
+
+## Posterior predictions and distributions for the "average" woman
+
+We are interested in predictions for the average woman. We define an "average" woman as one who lives in an urban area, has 2.65 children, has age 0, and wealth 0.
+
+For an average woman of an \textit{unknown} region, the model predicts a probability of 51% that the woman will use birth control with a 95\% posterior interval spanning 0 to 1, which is not any different from flipping a coin and thus not very informative. However, when we look at the average woman who lives in region 1 or 14, we see much a clearer predicted probability difference between the two. The predicted probability that a woman from region 14 will use birth control is 66% vs. 32% for region 1. Thus, if the marketing team has to choose between region 1 and region 14 to focus their marketing efforts, it would be better to spend it on region 14. 
+
+We also see this difference in predicted probability of birth control use between region 1 and 14 by looking at the region-specific random effects and their predictive distributions. **Figure 6** shows the random effects distribution specific to region 1, region 14, and an unknown region. We see that the random effect distribution for region 14 has a posterior interval that has all positive values. A positive parameter value increases the odds that the subject uses birth control. On the other hand, we see that region 1 has a random effect distribution that has a posterior interval with negative values, which decreases the odds that the subject uses birth control. 
+
+```{r,echo=FALSE,include=FALSE}
+
+# table of parameter values
+summary(myfit)$summary[,c(1,4,8,9,10)]
+
+```
+
+
+
+
+```{r,echo=FALSE,fig.cap="The blue circles/bars give the posterior median/(0.025,0.975) credible interval for the random effects parameter. Region 1 and 14 show very different posterior intervals, with region 1 being all negative, and region 14 being all positive.",fig.width=5,fig.height=3}
+
+fitArray2 <- as.array(myfit)[,,c(1,14,127)]
+dimnames(fitArray2)[[3]] <- c("region 1", 'region 14','unknown region')
+
+mcmc_intervals(fitArray2, prob = 0.95, prob_outer = 0.95)
+```
+Finally, to get a sense of how predicted probabilities differ across regions, **Figure 7** shows the random effects distributions for all regions and their corresponding predicted probabilities in red next to the region number on the y-axis. We have ordered the regions by predicted probabilities to confirm that, in general, an increasing random effects parameter corresponds to an increasing predicted probability for this data set. 
+
+
+```{r,echo=FALSE,fig.height=8,fig.cap="Region-specific random effects distributions for all 60 regions with their corresponding predicted probability of birth control use (red), ordered by predicted probability. In general, higher random effect distributions correspond to higher predicted probabilities.",message=FALSE}
+
+
+# random effect distribution for all regions ordered by predicted probability
+
+df_copy <- df
+levels(df_copy$homeStyle) <-factor(c(0,1))
+
+three_plot <- df_copy %>% 
+  group_by(region) %>% 
+  summarize(birthControl=mean(birthControl),
+            homeStyle=mean(as.numeric(as.character(homeStyle))),
+            children=mean(children),
+            age=mean(age),
+            wealth=mean(wealth))
+
+
+d <- myfit %>% as.data.frame() %>% colnames()
+e <- d[1:60]
+mu <- data.frame(t(as.data.frame(myfit, pars = e)))
+homeStyle_col <- as_tibble(three_plot$homeStyle) %>% rename('homeStyle'=value)
+birthControl_col <- as_tibble(three_plot$birthControl) %>% rename('birthControl'=value)
+
+pred_probs <- summary(myfit)$summary[67:126,1] %>% 
+  as_tibble() %>% 
+  cbind(region=(1:61)[-54]) %>%
+  rename('PredictedProbs'=value) %>% 
+  mutate_at(ggplot2::vars("region"), factor)
+
+mu_all <- mu %>% 
+  bind_cols(homeStyle_col) %>% 
+  bind_cols(birthControl_col) %>% 
+  cbind(region=(1:61)[-54]) %>%
+  cbind(probs=pred_probs$PredictedProbs) %>%
+  mutate_at(ggplot2::vars("region"), factor) %>%
+  gather(key = "Chain", value = "expected_mean",-region, -homeStyle,-birthControl,-probs) %>%
+  mutate(region = fct_reorder(.f = region, .x = probs, .fun = mean)) 
+
+mu_summary <- mu_all %>% 
+              group_by(region) %>% 
+              summarize(homeStyle=first(homeStyle), probs=first(probs)) %>%
+              mutate(probs=sprintf("%1.f%%", 100*probs))
+
+
+mu_all %>% ggplot() + geom_density_ridges( aes(x = expected_mean, 
+                                              y=as.factor(region),
+                                              fill=probs,
+                                              height = ..density..),
+                                           alpha=.5,
+                                           scale=6,
+                                           show.legend=TRUE) + 
+  scale_fill_viridis_c(name = "Predicted probabilities") +
+  geom_vline(xintercept = 0, col = "red") + 
+  theme_light() + 
+  labs(title="",x="Region specific random effect",y="Region and predicted probability (red)") + 
+  geom_text(data=mu_summary, aes(y=region, x=-3.15, label=probs), 
+            position=position_nudge(y=0.0), colour="red", size=2.5) + 
+  theme(axis.text.y = element_text(size=9)) 
+  
+```
+
+
+
+# Conclusions
+
+The results from our methods found significant evidence that a woman who lives in an urban area has approximately 2 times the odds of using birth control as compared to a similar demographic woman who lives in a rural area. There is also significant evidence that a woman who has an additional child has approximately 1.5 times the odds of using birth control as compared to a similar demographic woman without the additional child. There does not seem to be any evidence of an association between age and wealth, although there is some borderline evidence that the odds of birth control use decrease as age increases. 
+
+We also looked at region 1 and 14 and concluded that if the marketing department had to choose between the two on which to expend most of their marketing efforts in, they should choose region 14 because of its higher predicted probability. If the marketing department were interested in other regions to expend their marketing efforts in besides the two largest, they should look at region 34, which has the highest posterior prediction probability of 67% for birth control use by an average woman. 
+
+However, several important questions were raised about the data set itself and how the data was gathered while doing this analysis. First -- are the samples from each region representative of each region? For instance, if the sample from region 14 included a higher proportion of birth control users than the region population overall, then perhaps the marketing team would not be targeting the right region. Second -- are the regions included in this data set representative of the population that the marketing team is interested in? If the 60 regions in this data set do not cover the full range of the company's target market, then a more complete picture of birth control use might need to include regions not part of this analysis. Third -- why are woman with no children excluded from the data set? It could be the case that women with no children use more birth control than women with children. Answering these questions would be an important step in confirming the conclusions of this analysis
+
+
+
